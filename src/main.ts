@@ -13,14 +13,14 @@ import {
 	DecryptError,
 	encryptContent,
 	encryptContentVerified,
-	LockerPayload,
-	LockerScope,
+	type LockerPayload,
+	type LockerScope,
 	SelfCheckError,
 } from "./crypto";
 import { buildLockedNote, isLocked, parseLockedNote, readScope } from "./format";
 import { ConfirmModal } from "./ConfirmModal";
-import { PasswordModal, PasswordPromptOptions } from "./PasswordModal";
-import { DEFAULT_SETTINGS, LockerSettings, LockerSettingTab } from "./settings";
+import { PasswordModal, type PasswordPromptOptions } from "./PasswordModal";
+import { DEFAULT_SETTINGS, type LockerSettings, LockySettingTab } from "./settings";
 
 const SWEEP_INTERVAL_MS = 30 * 1000;
 
@@ -45,7 +45,7 @@ interface PersistedData {
 	ledger: LedgerEntry[];
 }
 
-export default class LockerPlugin extends Plugin {
+export default class LockyPlugin extends Plugin {
 	settings: LockerSettings = { ...DEFAULT_SETTINGS };
 
 	/** Vault password cached for the session, never persisted to disk. */
@@ -55,7 +55,7 @@ export default class LockerPlugin extends Plugin {
 	/** path -> details needed to re-lock an unlocked note. */
 	private unlocked = new Map<string, UnlockedNote>();
 
-	/** Serializes mutating operations per file path (lock/unlock/relock). */
+	/** Serializes mutating operations per file path (lock/unlock/relock/decrypt). */
 	private inFlight = new Set<string>();
 
 	/** True while a bulk folder/vault operation runs, so auto-lock backs off. */
@@ -72,23 +72,26 @@ export default class LockerPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
-		this.addSettingTab(new LockerSettingTab(this.app, this));
+		this.addSettingTab(new LockySettingTab(this.app, this));
 
-		this.ribbonEl = this.addRibbonIcon("lock", "Lockbox: toggle lock on current note", async () => {
+		this.ribbonEl = this.addRibbonIcon("lock", "Locky: toggle lock on current note", async () => {
 			await this.toggleActiveNote();
 		});
 
 		// Render the encrypted payload block as a compact placeholder in reading view
-		// instead of a wall of base64.
-		this.registerMarkdownCodeBlockProcessor("locker", (_source, el) => {
+		// instead of a wall of base64. Supports both 'locky' and legacy 'locker' blocks.
+		const renderPlaceholder = (_source: string, el: HTMLElement) => {
 			el.createDiv({
-				cls: "locker-blob",
-				text: "🔒 Locked note — unlock with Lockbox to view its contents.",
+				cls: "locker-blob locky-blob",
+				text: "🔒 Locked note — unlock with Locky to view its contents.",
 			});
-		});
+		};
+		this.registerMarkdownCodeBlockProcessor("locky", renderPlaceholder);
+		this.registerMarkdownCodeBlockProcessor("locker", renderPlaceholder);
 
 		this.statusBarEl = this.addStatusBarItem();
 		this.statusBarEl.addClass("locker-status");
+		this.statusBarEl.addClass("locky-status");
 		this.statusBarEl.addEventListener("click", () => {
 			if (this.unlocked.size > 0) void this.lockAll();
 		});
@@ -132,6 +135,11 @@ export default class LockerPlugin extends Plugin {
 			checkCallback: (checking) => this.commandOnFile(checking, (f) => this.unlockNote(f)),
 		});
 		this.addCommand({
+			id: "permanently-decrypt-note",
+			name: "Permanently decrypt note (remove encryption)",
+			checkCallback: (checking) => this.commandOnFile(checking, (f) => this.permanentlyDecryptNote(f)),
+		});
+		this.addCommand({
 			id: "lock-all",
 			name: "Lock all currently-unlocked notes",
 			callback: () => this.lockAll(),
@@ -148,6 +156,13 @@ export default class LockerPlugin extends Plugin {
 			name: "Unlock every vault-password note in the vault",
 			callback: () => this.unlockFolder(this.app.vault.getRoot()),
 		});
+
+		this.addCommand({
+			id: "permanently-decrypt-vault",
+			name: "Permanently decrypt every vault-password note in the vault",
+			callback: () => this.permanentlyDecryptFolder(this.app.vault.getRoot()),
+		});
+
 		this.addCommand({
 			id: "forget-vault-password",
 			name: "Forget vault password (lock session)",
@@ -172,6 +187,14 @@ export default class LockerPlugin extends Plugin {
 				} else if (file instanceof TFolder) {
 					this.addFolderMenuItems(menu, file);
 				}
+			})
+		);
+
+		this.registerEvent(
+			this.app.workspace.on("files-menu", (menu: Menu, files: TAbstractFile[]) => {
+				const mdFiles = this.collectMarkdownFiles(files);
+				if (mdFiles.length === 0) return;
+				this.addFilesMenuItems(menu, mdFiles);
 			})
 		);
 
@@ -259,15 +282,21 @@ export default class LockerPlugin extends Plugin {
 	private addFileMenuItems(menu: Menu, file: TFile): void {
 		menu.addItem((item) =>
 			item
-				.setTitle("Lockbox: lock note")
+				.setTitle("Locky: lock note")
 				.setIcon("lock")
 				.onClick(() => this.lockNote(file, "vault"))
 		);
 		menu.addItem((item) =>
 			item
-				.setTitle("Lockbox: unlock note")
+				.setTitle("Locky: unlock note")
 				.setIcon("unlock")
 				.onClick(() => this.unlockNote(file))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle("Locky: permanently decrypt note")
+				.setIcon("unlock")
+				.onClick(() => this.permanentlyDecryptNote(file))
 		);
 	}
 
@@ -275,26 +304,54 @@ export default class LockerPlugin extends Plugin {
 		if (this.notesInFolder(folder).length === 0) return; // nothing to act on
 		menu.addItem((item) =>
 			item
-				.setTitle("Lockbox: lock all notes in folder")
+				.setTitle("Locky: lock all notes in folder")
 				.setIcon("lock")
 				.onClick(() => this.lockFolder(folder))
 		);
 		menu.addItem((item) =>
 			item
-				.setTitle("Lockbox: unlock all notes in folder")
+				.setTitle("Locky: unlock all notes in folder")
 				.setIcon("unlock")
 				.onClick(() => this.unlockFolder(folder))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle("Locky: permanently decrypt all notes in folder")
+				.setIcon("unlock")
+				.onClick(() => this.permanentlyDecryptFolder(folder))
+		);
+	}
+
+	private addFilesMenuItems(menu: Menu, files: TFile[]): void {
+		const desc = `${files.length} selected note(s)`;
+		menu.addItem((item) =>
+			item
+				.setTitle("Locky: lock selected notes (vault password)")
+				.setIcon("lock")
+				.onClick(() => this.lockFiles(files, desc))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle("Locky: unlock selected notes")
+				.setIcon("unlock")
+				.onClick(() => this.unlockFiles(files, desc))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle("Locky: permanently decrypt selected notes")
+				.setIcon("unlock")
+				.onClick(() => this.permanentlyDecryptFiles(files, desc))
 		);
 	}
 
 	private async toggleActiveNote(): Promise<void> {
 		const file = this.app.workspace.getActiveFile();
 		if (!file) {
-			new Notice("Lockbox: open a note first.");
+			new Notice("Locky: open a note first.");
 			return;
 		}
 		if (file.extension !== "md") {
-			new Notice(`Lockbox only locks markdown (.md) notes; "${file.name}" is a .${file.extension} file.`);
+			new Notice(`Locky only locks markdown (.md) notes; "${file.name}" is a .${file.extension} file.`);
 			return;
 		}
 		const content = await this.readLiveContent(file);
@@ -372,20 +429,20 @@ export default class LockerPlugin extends Plugin {
 		try {
 			await fn();
 		} catch (e) {
-			console.error("Lockbox: operation failed", e);
-			new Notice("Lockbox: operation failed. See console for details.");
+			console.error("Locky: operation failed", e);
+			new Notice("Locky: operation failed. See console for details.");
 		} finally {
 			this.inFlight.delete(path);
 		}
 		return true;
 	}
 
-	// ---- lock / unlock --------------------------------------------------
+	// ---- lock / unlock / permanent decrypt -----------------------------
 
 	async lockNote(file: TFile, scope: LockerScope): Promise<void> {
 		const ran = await this.withFileLock(file.path, async () => {
 			if (isLocked(await this.readLiveContent(file))) {
-				new Notice("Lockbox: that note is already locked.");
+				new Notice("Locky: that note is already locked.");
 				return;
 			}
 
@@ -406,24 +463,24 @@ export default class LockerPlugin extends Plugin {
 				const payload = await this.seal(content, password, scope, this.settings.iterations);
 				const written = await this.writeContent(file, content, buildLockedNote(payload));
 				if (!written) {
-					new Notice(`Lockbox: "${file.basename}" changed while locking — left unlocked.`);
+					new Notice(`Locky: "${file.basename}" changed while locking — left unlocked.`);
 					return;
 				}
 				this.unlocked.delete(file.path);
 				await this.persist();
 				this.updateStatusBar();
-				new Notice(`Lockbox: locked "${file.basename}".`);
+				new Notice(`Locky: locked "${file.basename}".`);
 			} catch (e) {
 				if (e instanceof SelfCheckError) {
-					console.error("Lockbox: encryption self-check failed", e);
-					new Notice("Lockbox: encryption self-check failed — note left unlocked to avoid data loss.");
+					console.error("Locky: encryption self-check failed", e);
+					new Notice("Locky: encryption self-check failed — note left unlocked to avoid data loss.");
 				} else {
-					console.error("Lockbox: failed to lock note", e);
-					new Notice("Lockbox: failed to lock note. See console for details.");
+					console.error("Locky: failed to lock note", e);
+					new Notice("Locky: failed to lock note. See console for details.");
 				}
 			}
 		});
-		if (!ran) new Notice("Lockbox: that note is busy — try again in a moment.");
+		if (!ran) new Notice("Locky: that note is busy — try again in a moment.");
 	}
 
 	async unlockNote(file: TFile): Promise<void> {
@@ -431,7 +488,7 @@ export default class LockerPlugin extends Plugin {
 			const content = await this.readLiveContent(file);
 			const payload = parseLockedNote(content);
 			if (!payload || !isLocked(content)) {
-				new Notice("Lockbox: that note isn't locked.");
+				new Notice("Locky: that note isn't locked.");
 				return;
 			}
 
@@ -450,7 +507,7 @@ export default class LockerPlugin extends Plugin {
 				const plaintext = await decryptContent(payload, password);
 				const written = await this.writeContent(file, content, plaintext);
 				if (!written) {
-					new Notice(`Lockbox: "${file.basename}" changed while unlocking — try again.`);
+					new Notice(`Locky: "${file.basename}" changed while unlocking — try again.`);
 					return;
 				}
 				this.unlocked.set(file.path, {
@@ -462,18 +519,89 @@ export default class LockerPlugin extends Plugin {
 				if (scope === "vault") this.cacheVaultPassword(password);
 				await this.persist();
 				this.updateStatusBar();
-				new Notice(`Lockbox: unlocked "${file.basename}".`);
+				new Notice(`Locky: unlocked "${file.basename}".`);
 			} catch (e) {
 				if (e instanceof DecryptError) {
-					new Notice("Lockbox: incorrect password.");
+					new Notice("Locky: incorrect password.");
 					if (scope === "vault") this.forgetVaultPassword(true);
 				} else {
-					console.error("Lockbox: failed to unlock note", e);
-					new Notice("Lockbox: failed to unlock note. See console for details.");
+					console.error("Locky: failed to unlock note", e);
+					new Notice("Locky: failed to unlock note. See console for details.");
 				}
 			}
 		});
-		if (!ran) new Notice("Lockbox: that note is busy — try again in a moment.");
+		if (!ran) new Notice("Locky: that note is busy — try again in a moment.");
+	}
+
+	/**
+	 * Permanently decrypts a note, completely undoing the encryption action.
+	 * If the note was locked, prompts for the password, decrypts, and writes plaintext back to disk.
+	 * If the note was already unlocked in memory, removes it from the auto-lock registry and persists.
+	 * The note is no longer tracked or auto-locked, remaining plain markdown at rest.
+	 */
+	async permanentlyDecryptNote(file: TFile): Promise<void> {
+		const ran = await this.withFileLock(file.path, async () => {
+			// Case 1: Note is already unlocked in this session (plaintext on disk, tracked in unlocked map)
+			if (this.unlocked.has(file.path)) {
+				const confirmed = await this.confirmBulk(
+					"permanently decrypt",
+					1,
+					`"${file.basename}"`,
+					`"${file.basename}" is currently unlocked. Permanently decrypting will undo encryption, remove it from auto-lock, and keep it as a normal plain markdown note on disk.`
+				);
+				if (!confirmed) return;
+
+				this.unlocked.delete(file.path);
+				this.exposed = this.exposed.filter((e) => e.file.path !== file.path);
+				await this.persist();
+				this.updateStatusBar();
+				new Notice(`Locky: permanently decrypted "${file.basename}".`);
+				return;
+			}
+
+			// Case 2: Note is locked on disk
+			const content = await this.readLiveContent(file);
+			const payload = parseLockedNote(content);
+			if (!payload || !isLocked(content)) {
+				new Notice(`Locky: "${file.basename}" is not locked.`);
+				return;
+			}
+
+			const scope = payload.scope ?? readScope(content);
+			const password =
+				scope === "note"
+					? await this.promptPassword({
+							title: "Permanently decrypt note",
+							description: `Enter the password for "${file.basename}" to permanently remove encryption and restore plaintext.`,
+							cta: "Permanently Decrypt",
+						})
+					: await this.ensureVaultPassword(false);
+			if (!password) return;
+
+			try {
+				const plaintext = await decryptContent(payload, password);
+				const written = await this.writeContent(file, content, plaintext);
+				if (!written) {
+					new Notice(`Locky: "${file.basename}" changed while decrypting — try again.`);
+					return;
+				}
+				this.unlocked.delete(file.path);
+				this.exposed = this.exposed.filter((e) => e.file.path !== file.path);
+				if (scope === "vault") this.cacheVaultPassword(password);
+				await this.persist();
+				this.updateStatusBar();
+				new Notice(`Locky: permanently decrypted "${file.basename}".`);
+			} catch (e) {
+				if (e instanceof DecryptError) {
+					new Notice("Locky: incorrect password.");
+					if (scope === "vault") this.forgetVaultPassword(true);
+				} else {
+					console.error("Locky: failed to permanently decrypt note", e);
+					new Notice("Locky: failed to permanently decrypt note. See console for details.");
+				}
+			}
+		});
+		if (!ran) new Notice("Locky: that note is busy — try again in a moment.");
 	}
 
 	/** Re-encrypt a note that was previously unlocked, using its stored password. */
@@ -508,14 +636,14 @@ export default class LockerPlugin extends Plugin {
 				const payload = await this.seal(content, password, info.scope, info.iterations);
 				const written = await this.writeContent(file, content, buildLockedNote(payload));
 				if (!written) {
-					new Notice(`Lockbox: "${file.basename}" changed while locking — left unlocked, will retry.`);
+					new Notice(`Locky: "${file.basename}" changed while locking — left unlocked, will retry.`);
 					return;
 				}
 				this.unlocked.delete(path);
 				await this.persist();
 			} catch (e) {
-				console.error("Lockbox: failed to auto-lock note", e);
-				new Notice(`Lockbox: could not auto-lock "${file.basename}" — it remains unlocked. See console.`);
+				console.error("Locky: failed to auto-lock note", e);
+				new Notice(`Locky: could not auto-lock "${file.basename}" — it remains unlocked. See console.`);
 			} finally {
 				this.updateStatusBar();
 			}
@@ -527,7 +655,7 @@ export default class LockerPlugin extends Plugin {
 		// click / command, silent=false) must not interfere with it. The quit/
 		// background re-lock paths pass silent=true and are allowed to force through.
 		if (this.bulkActive && !silent) {
-			new Notice("Lockbox: a bulk operation is in progress.");
+			new Notice("Locky: a bulk operation is in progress.");
 			return;
 		}
 		const paths = Array.from(this.unlocked.keys());
@@ -536,12 +664,12 @@ export default class LockerPlugin extends Plugin {
 		}
 		if (!silent) {
 			new Notice(
-				paths.length ? `Lockbox: locked ${paths.length} note(s).` : "Lockbox: nothing to lock."
+				paths.length ? `Locky: locked ${paths.length} note(s).` : "Locky: nothing to lock."
 			);
 		}
 	}
 
-	// ---- bulk / folder operations --------------------------------------
+	// ---- bulk operations (folder, selected files, vault) ----------------
 
 	/** All markdown notes at or under `folder` (recursive). */
 	private notesInFolder(folder: TFolder): TFile[] {
@@ -551,12 +679,36 @@ export default class LockerPlugin extends Plugin {
 		return this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(prefix));
 	}
 
+	/** Collect all unique markdown files from a list of files and folders. */
+	private collectMarkdownFiles(items: TAbstractFile[]): TFile[] {
+		const files: TFile[] = [];
+		for (const item of items) {
+			if (item instanceof TFile && item.extension === "md") {
+				files.push(item);
+			} else if (item instanceof TFolder) {
+				files.push(...this.notesInFolder(item));
+			}
+		}
+		const seen = new Set<string>();
+		return files.filter((f) => {
+			if (seen.has(f.path)) return false;
+			seen.add(f.path);
+			return true;
+		});
+	}
+
 	/** Confirmation gate for mass operations. Overridable for tests. */
-	protected confirmBulk(verb: string, count: number, where: string): Promise<boolean> {
+	protected confirmBulk(verb: string, count: number, where: string, customMessage?: string): Promise<boolean> {
 		return new ConfirmModal(this.app, {
-			title: `Lockbox: ${verb} ${count} note(s)?`,
-			message: `This will ${verb} ${count} note(s) in ${where}.`,
-			cta: "Proceed",
+			title: `Locky: ${verb} ${count} note${count === 1 ? "" : "s"}?`,
+			message:
+				customMessage ??
+				`This will ${verb} ${count} note${count === 1 ? "" : "s"} in ${where}.${
+					verb.includes("decrypt")
+						? " Plain markdown will be restored to disk and auto-lock will no longer re-encrypt."
+						: ""
+				}`,
+			cta: verb.includes("decrypt") ? "Permanently Decrypt" : "Proceed",
 		}).open();
 	}
 
@@ -564,31 +716,30 @@ export default class LockerPlugin extends Plugin {
 		return folder.isRoot() ? "the entire vault" : `"${folder.path}"`;
 	}
 
-	/** Lock every currently-unlocked note in a folder with the vault password. */
-	async lockFolder(folder: TFolder): Promise<void> {
-		// Single pass: classify and carry content forward so each note is read once.
+	/** Lock every currently-unlocked note in a list of files with the vault password. */
+	async lockFiles(files: TFile[], targetDescription: string): Promise<void> {
 		const work: { file: TFile; content: string }[] = [];
-		for (const file of this.notesInFolder(folder)) {
+		for (const file of files) {
 			try {
 				const content = await this.readLiveContent(file);
 				if (!isLocked(content)) work.push({ file, content });
 			} catch (e) {
-				console.error("Lockbox: could not read note for bulk lock", file.path, e);
+				console.error("Locky: could not read note for bulk lock", file.path, e);
 			}
 		}
 		if (work.length === 0) {
-			new Notice("Lockbox: no unlocked notes to lock here.");
+			new Notice("Locky: no unlocked notes to lock here.");
 			return;
 		}
-		if (!(await this.confirmBulk("encrypt", work.length, this.describeFolder(folder)))) return;
+		if (!(await this.confirmBulk("encrypt", work.length, targetDescription))) return;
 
 		const password = await this.ensureVaultPassword(true);
 		if (!password) {
-			new Notice("Lockbox: cancelled — no notes were changed.");
+			new Notice("Locky: cancelled — no notes were changed.");
 			return;
 		}
 
-		const progress = new Notice(`Lockbox: locking ${work.length} note(s)…`, 0);
+		const progress = new Notice(`Locky: locking ${work.length} note(s)…`, 0);
 		let locked = 0;
 		let changed = 0;
 		let failed = 0;
@@ -608,7 +759,7 @@ export default class LockerPlugin extends Plugin {
 							trouble.push(file.basename);
 						}
 					} catch (e) {
-						console.error("Lockbox: failed to lock note in bulk", file.path, e);
+						console.error("Locky: failed to lock note in bulk", file.path, e);
 						failed++;
 						trouble.push(file.basename);
 					}
@@ -627,14 +778,19 @@ export default class LockerPlugin extends Plugin {
 		new Notice(this.bulkSummary("locked", locked, { changed, failed, skipped }, trouble));
 	}
 
+	/** Lock every currently-unlocked note in a folder with the vault password. */
+	lockFolder(folder: TFolder): Promise<void> {
+		return this.lockFiles(this.notesInFolder(folder), this.describeFolder(folder));
+	}
+
 	/**
-	 * Unlock every vault-password note in a folder. Notes that use their own
+	 * Unlock every vault-password note in a list of files. Notes that use their own
 	 * separate password are reported and skipped (unlock those individually).
 	 */
-	async unlockFolder(folder: TFolder): Promise<void> {
+	async unlockFiles(files: TFile[], targetDescription: string): Promise<void> {
 		const work: { file: TFile; content: string; payload: LockerPayload }[] = [];
 		let perNote = 0;
-		for (const file of this.notesInFolder(folder)) {
+		for (const file of files) {
 			try {
 				const content = await this.readLiveContent(file);
 				const payload = parseLockedNote(content);
@@ -642,14 +798,14 @@ export default class LockerPlugin extends Plugin {
 				if ((payload.scope ?? readScope(content)) === "note") perNote++;
 				else work.push({ file, content, payload });
 			} catch (e) {
-				console.error("Lockbox: could not read note for bulk unlock", file.path, e);
+				console.error("Locky: could not read note for bulk unlock", file.path, e);
 			}
 		}
 		if (work.length === 0) {
 			new Notice(
 				perNote > 0
-					? `Lockbox: ${perNote} note(s) here use a separate password — unlock them individually.`
-					: "Lockbox: no vault-password notes to unlock here."
+					? `Locky: ${perNote} note(s) here use a separate password — unlock them individually.`
+					: "Locky: no vault-password notes to unlock here."
 			);
 			return;
 		}
@@ -657,7 +813,7 @@ export default class LockerPlugin extends Plugin {
 			!(await this.confirmBulk(
 				"decrypt (write plaintext for)",
 				work.length,
-				this.describeFolder(folder)
+				targetDescription
 			))
 		) {
 			return;
@@ -666,11 +822,11 @@ export default class LockerPlugin extends Plugin {
 		const passwordWasCached = this.vaultPassword !== null;
 		const password = await this.ensureVaultPassword(false);
 		if (!password) {
-			new Notice("Lockbox: cancelled — no notes were changed.");
+			new Notice("Locky: cancelled — no notes were changed.");
 			return;
 		}
 
-		const progress = new Notice(`Lockbox: unlocking ${work.length} note(s)…`, 0);
+		const progress = new Notice(`Locky: unlocking ${work.length} note(s)…`, 0);
 		let unlockedCount = 0;
 		let wrongPassword = 0;
 		let changed = 0;
@@ -690,8 +846,6 @@ export default class LockerPlugin extends Plugin {
 								iterations: payload.iterations,
 								lastTouched: this.now(),
 							});
-							// Persist per note so a crash mid-bulk still leaves a recoverable
-							// ledger of the plaintext we've already written (matches unlockNote).
 							await this.persist();
 							unlockedCount++;
 						} else {
@@ -702,7 +856,7 @@ export default class LockerPlugin extends Plugin {
 						if (e instanceof DecryptError) {
 							wrongPassword++;
 						} else {
-							console.error("Lockbox: failed to unlock note in bulk", file.path, e);
+							console.error("Locky: failed to unlock note in bulk", file.path, e);
 							failed++;
 						}
 						trouble.push(file.basename);
@@ -714,9 +868,6 @@ export default class LockerPlugin extends Plugin {
 			if (unlockedCount > 0) {
 				this.cacheVaultPassword(password);
 			} else if (!passwordWasCached && wrongPassword > 0 && changed === 0 && failed === 0) {
-				// Only drop a freshly-entered password when the failures are clearly
-				// authentication failures — never a previously-good cached session
-				// password, and never when writes merely aborted on concurrent edits.
 				this.forgetVaultPassword(true);
 			}
 		} finally {
@@ -735,6 +886,147 @@ export default class LockerPlugin extends Plugin {
 		);
 	}
 
+	/** Unlock every vault-password note in a folder. */
+	unlockFolder(folder: TFolder): Promise<void> {
+		return this.unlockFiles(this.notesInFolder(folder), this.describeFolder(folder));
+	}
+
+	/**
+	 * Permanently decrypts a group of notes, completely undoing initial encryption.
+	 * Decrypts locked vault-password notes, untracks any currently-unlocked notes,
+	 * writes plain markdown, and prevents subsequent auto-locking.
+	 * Notes that use their own separate password are reported.
+	 */
+	async permanentlyDecryptFiles(files: TFile[], targetDescription: string): Promise<void> {
+		const work: { file: TFile; content: string; payload: LockerPayload }[] = [];
+		const alreadyUnlocked: TFile[] = [];
+		let perNote = 0;
+
+		for (const file of files) {
+			if (this.unlocked.has(file.path)) {
+				alreadyUnlocked.push(file);
+				continue;
+			}
+			try {
+				const content = await this.readLiveContent(file);
+				const payload = parseLockedNote(content);
+				if (!payload || !isLocked(content)) continue;
+				if ((payload.scope ?? readScope(content)) === "note") perNote++;
+				else work.push({ file, content, payload });
+			} catch (e) {
+				console.error("Locky: could not read note for permanent decryption", file.path, e);
+			}
+		}
+
+		const totalEligible = work.length + alreadyUnlocked.length;
+		if (totalEligible === 0) {
+			new Notice(
+				perNote > 0
+					? `Locky: ${perNote} note(s) here use a separate password — permanently decrypt them individually.`
+					: "Locky: no encrypted notes found to decrypt here."
+			);
+			return;
+		}
+
+		if (
+			!(await this.confirmBulk(
+				"permanently decrypt",
+				totalEligible,
+				targetDescription
+			))
+		) {
+			return;
+		}
+
+		let password = "";
+		let passwordWasCached = false;
+		if (work.length > 0) {
+			passwordWasCached = this.vaultPassword !== null;
+			const vaultPw = await this.ensureVaultPassword(false);
+			if (!vaultPw) {
+				new Notice("Locky: cancelled — no notes were changed.");
+				return;
+			}
+			password = vaultPw;
+		}
+
+		const progress = new Notice(`Locky: permanently decrypting ${totalEligible} note(s)…`, 0);
+		let decryptedCount = 0;
+		let wrongPassword = 0;
+		let changed = 0;
+		let failed = 0;
+		let skipped = 0;
+		const trouble: string[] = [];
+		this.bulkActive = true;
+
+		try {
+			// 1. Untrack and finalize notes that were already unlocked (plaintext on disk)
+			for (const file of alreadyUnlocked) {
+				const ran = await this.withFileLock(file.path, async () => {
+					this.unlocked.delete(file.path);
+					this.exposed = this.exposed.filter((e) => e.file.path !== file.path);
+					decryptedCount++;
+				});
+				if (!ran) skipped++;
+			}
+
+			// 2. Decrypt and write plaintext for notes that were locked on disk
+			for (const { file, content, payload } of work) {
+				const ran = await this.withFileLock(file.path, async () => {
+					try {
+						const plaintext = await decryptContent(payload, password);
+						if (await this.writeContent(file, content, plaintext)) {
+							this.unlocked.delete(file.path);
+							this.exposed = this.exposed.filter((e) => e.file.path !== file.path);
+							decryptedCount++;
+						} else {
+							changed++;
+							trouble.push(file.basename);
+						}
+					} catch (e) {
+						if (e instanceof DecryptError) {
+							wrongPassword++;
+						} else {
+							console.error("Locky: failed to permanently decrypt note in bulk", file.path, e);
+							failed++;
+						}
+						trouble.push(file.basename);
+					}
+				});
+				if (!ran) skipped++;
+			}
+
+			if (decryptedCount > 0 && work.length > 0) {
+				this.cacheVaultPassword(password);
+			} else if (!passwordWasCached && wrongPassword > 0 && changed === 0 && failed === 0) {
+				this.forgetVaultPassword(true);
+			}
+		} finally {
+			this.bulkActive = false;
+			try {
+				await this.persist();
+				this.updateStatusBar();
+			} finally {
+				progress.hide();
+			}
+		}
+
+		const extra = perNote ? ` ${perNote} use a separate password.` : "";
+		new Notice(
+			this.bulkSummary(
+				"permanently decrypted",
+				decryptedCount,
+				{ wrongPassword, changed, failed, skipped },
+				trouble
+			) + extra
+		);
+	}
+
+	/** Permanently decrypts all notes in a folder (or vault). */
+	permanentlyDecryptFolder(folder: TFolder): Promise<void> {
+		return this.permanentlyDecryptFiles(this.notesInFolder(folder), this.describeFolder(folder));
+	}
+
 	/** Build a human summary line for a bulk run, naming the notes that didn't complete. */
 	private bulkSummary(
 		verb: string,
@@ -748,7 +1040,7 @@ export default class LockerPlugin extends Plugin {
 		if (issues.failed) parts.push(`${issues.failed} failed`);
 		if (issues.skipped) parts.push(`${issues.skipped} busy`);
 		const names = trouble.length ? ` Left unchanged: ${trouble.slice(0, 5).join(", ")}${trouble.length > 5 ? "…" : ""}.` : "";
-		return `Lockbox: ${verb} ${ok} note(s)${parts.length ? ` — ${parts.join(", ")}` : ""}.${names}`;
+		return `Locky: ${verb} ${ok} note(s)${parts.length ? ` — ${parts.join(", ")}` : ""}.${names}`;
 	}
 
 	/**
@@ -774,28 +1066,30 @@ export default class LockerPlugin extends Plugin {
 		// indicator on mobile (where the status bar isn't shown).
 		if (this.ribbonEl) {
 			this.ribbonEl.toggleClass("locker-ribbon-warn", count > 0);
+			this.ribbonEl.toggleClass("locky-ribbon-warn", count > 0);
 			this.ribbonEl.setAttribute(
 				"aria-label",
 				count > 0
-					? `Lockbox: ${count} note(s) unlocked — tap to lock the current note`
-					: "Lockbox: toggle lock on current note"
+					? `Locky: ${count} note(s) unlocked — tap to lock the current note`
+					: "Locky: toggle lock on current note"
 			);
 		}
 
 		if (!this.statusBarEl) return;
 		this.statusBarEl.empty();
-		const icon = this.statusBarEl.createSpan({ cls: "locker-status-icon" });
+		const icon = this.statusBarEl.createSpan({ cls: "locker-status-icon locky-status-icon" });
 		setIcon(icon, count > 0 ? "unlock" : "lock");
 		this.statusBarEl.createSpan({
-			cls: "locker-status-text",
+			cls: "locker-status-text locky-status-text",
 			text: count > 0 ? `${count} unlocked` : "Locked",
 		});
 		this.statusBarEl.toggleClass("locker-status-warn", count > 0);
+		this.statusBarEl.toggleClass("locky-status-warn", count > 0);
 		this.statusBarEl.setAttribute(
 			"aria-label",
 			count > 0
-				? `Lockbox: ${count} note(s) unlocked (plaintext on disk) — click to lock all`
-				: "Lockbox: no notes are unlocked"
+				? `Locky: ${count} note(s) unlocked (plaintext on disk) — click to lock all`
+				: "Locky: no notes are unlocked"
 		);
 	}
 
@@ -820,8 +1114,8 @@ export default class LockerPlugin extends Plugin {
 		await this.persist();
 		if (exposed.length > 0) {
 			new Notice(
-				`Lockbox: ${exposed.length} note(s) may have been left unlocked after an unclean shutdown. ` +
-					`Run "Lockbox: secure notes left exposed" to re-encrypt them.`,
+				`Locky: ${exposed.length} note(s) may have been left unlocked after an unclean shutdown. ` +
+					`Run "Locky: secure notes left exposed" to re-encrypt them.`,
 				12000
 			);
 		}
@@ -843,7 +1137,7 @@ export default class LockerPlugin extends Plugin {
 				const payload = await this.seal(content, password, entry.scope, this.settings.iterations);
 				ok = await this.writeContent(entry.file, content, buildLockedNote(payload));
 			} catch (e) {
-				console.error("Lockbox: failed to secure exposed note", entry.file.path, e);
+				console.error("Locky: failed to secure exposed note", entry.file.path, e);
 			}
 		});
 		return ok;
@@ -862,7 +1156,7 @@ export default class LockerPlugin extends Plugin {
 		if (vaultNotes.length > 0) {
 			const password = await this.ensureVaultPassword(true);
 			if (!password) {
-				new Notice("Lockbox: cancelled — no notes were changed.");
+				new Notice("Locky: cancelled — no notes were changed.");
 				return;
 			}
 			for (const entry of vaultNotes) {
@@ -888,7 +1182,7 @@ export default class LockerPlugin extends Plugin {
 
 		this.exposed = stillExposed;
 		new Notice(
-			`Lockbox: secured ${secured} note(s).` +
+			`Locky: secured ${secured} note(s).` +
 				(stillExposed.length ? ` ${stillExposed.length} still exposed.` : "")
 		);
 	}
@@ -925,7 +1219,7 @@ export default class LockerPlugin extends Plugin {
 	forgetVaultPassword(silent = false): void {
 		this.vaultPassword = null;
 		this.vaultPasswordSetAt = 0;
-		if (!silent) new Notice("Lockbox: forgot the cached vault password.");
+		if (!silent) new Notice("Locky: forgot the cached vault password.");
 	}
 
 	// ---- events & timers ------------------------------------------------
@@ -979,6 +1273,8 @@ export default class LockerPlugin extends Plugin {
 		return Date.now();
 	}
 }
+
+export { LockyPlugin as LockerPlugin };
 
 /** Parse a persisted ledger, tolerating the legacy string-array format (scope unknown -> vault). */
 function normalizeLedger(raw: unknown): LedgerEntry[] {

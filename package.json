@@ -1,22 +1,22 @@
 {
-	"name": "lockbox",
-	"version": "0.5.3",
-	"description": "Encrypt note contents at rest while keeping the title visible.",
+	"name": "locky",
+	"version": "1.0.0",
+	"description": "Encrypt note contents at rest while keeping the title visible. Lock, unlock, or permanently decrypt notes with a vault-wide password or a per-note password.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"install-local": "npm run build && node scripts/install-local.mjs",
-		"test": "node src/.tests/locker.test.mjs && node src/.tests/orchestration.test.mjs",
+		"test": "node --experimental-transform-types --import ./tests/register-mock.mjs --test tests/*.test.mjs",
 		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
 	"keywords": [
 		"obsidian",
 		"plugin",
 		"encryption",
-		"privacy"
+		"privacy",
+		"decrypt"
 	],
-	"author": "Zarware",
+	"author": "boinkdevteam",
 	"license": "GPL-3.0-or-later",
 	"devDependencies": {
 		"@types/node": "^20.11.0",

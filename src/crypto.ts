@@ -1,5 +1,5 @@
 /*
- * Cryptography for Lockbox.
+ * Cryptography for Locky.
  *
  * Uses the Web Crypto API (available in Obsidian's Electron runtime and on
  * mobile via Capacitor). Keys are derived from a password with PBKDF2 and
@@ -16,6 +16,7 @@ const IV_BYTES = 12;
 const KEY_BITS = 256;
 
 export type LockerScope = "vault" | "note";
+export type LockyScope = LockerScope;
 
 /** Serializable payload stored inside the locked note. */
 export interface LockerPayload {
@@ -34,6 +35,7 @@ export interface LockerPayload {
 	/** whether this note expects the vault password or its own password */
 	scope: LockerScope;
 }
+export type LockyPayload = LockerPayload;
 
 /** Thrown when decryption fails (wrong password or corrupted data). */
 export class DecryptError extends Error {

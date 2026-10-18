@@ -1,6 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import { DEFAULT_ITERATIONS } from "./crypto";
-import type LockerPlugin from "./main";
+import type LockyPlugin from "./main";
 
 export interface LockerSettings {
 	/** PBKDF2 iteration count used when locking new notes. */
@@ -15,6 +15,8 @@ export interface LockerSettings {
 	verifyOnLock: boolean;
 }
 
+export type LockySettings = LockerSettings;
+
 export const DEFAULT_SETTINGS: LockerSettings = {
 	iterations: DEFAULT_ITERATIONS,
 	autoLockOnClose: true,
@@ -25,8 +27,8 @@ export const DEFAULT_SETTINGS: LockerSettings = {
 	verifyOnLock: true,
 };
 
-export class LockerSettingTab extends PluginSettingTab {
-	constructor(app: App, private plugin: LockerPlugin) {
+export class LockySettingTab extends PluginSettingTab {
+	constructor(app: App, private plugin: LockyPlugin) {
 		super(app, plugin);
 	}
 
@@ -124,10 +126,12 @@ export class LockerSettingTab extends PluginSettingTab {
 		const warn = containerEl.createEl("div", { cls: "locker-settings-warning" });
 		warn.createEl("strong", { text: "Heads up: " });
 		warn.appendText(
-			"There is no password recovery. If you forget a password, the encrypted note cannot be decrypted. Keep backups of important notes."
+			"There is no password recovery. If you forget a password, the encrypted note cannot be decrypted. Keep backups of important notes. You can permanently decrypt a note or vault at any time with its password to permanently remove encryption."
 		);
 	}
 }
+
+export { LockySettingTab as LockerSettingTab };
 
 /**
  * Parse an integer within [min, max]. Returns null for empty/invalid/out-of-range

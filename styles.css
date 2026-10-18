@@ -1,17 +1,20 @@
-.locker-modal-desc {
+.locker-modal-desc,
+.locky-modal-desc {
 	color: var(--text-muted);
 	margin-top: 0;
 	margin-bottom: 1em;
 	font-size: var(--font-ui-small);
 }
 
-.locker-modal-error {
+.locker-modal-error,
+.locky-modal-error {
 	color: var(--text-error);
 	font-size: var(--font-ui-small);
 	margin-top: 0.5em;
 }
 
-.locker-settings-warning {
+.locker-settings-warning,
+.locky-settings-warning {
 	margin-top: 1.5em;
 	padding: 0.75em 1em;
 	border-radius: var(--radius-m);
@@ -22,14 +25,16 @@
 }
 
 /* Password strength meter. */
-.locker-strength {
+.locker-strength,
+.locky-strength {
 	display: flex;
 	align-items: center;
 	gap: 0.6em;
 	margin: 0 0 0.75em 0;
 }
 
-.locker-strength-track {
+.locker-strength-track,
+.locky-strength-track {
 	flex: 1;
 	height: 6px;
 	border-radius: 3px;
@@ -37,7 +42,8 @@
 	overflow: hidden;
 }
 
-.locker-strength-fill {
+.locker-strength-fill,
+.locky-strength-fill {
 	height: 100%;
 	width: 0;
 	border-radius: 3px;
@@ -45,35 +51,42 @@
 	background-color: var(--text-error);
 }
 
-.locker-strength-fill[data-score="2"] {
+.locker-strength-fill[data-score="2"],
+.locky-strength-fill[data-score="2"] {
 	background-color: var(--text-warning, #d9a441);
 }
 
 .locker-strength-fill[data-score="3"],
-.locker-strength-fill[data-score="4"] {
+.locky-strength-fill[data-score="3"],
+.locker-strength-fill[data-score="4"],
+.locky-strength-fill[data-score="4"] {
 	background-color: var(--text-success, #4caf50);
 }
 
-.locker-strength-label {
+.locker-strength-label,
+.locky-strength-label {
 	min-width: 5em;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 }
 
 /* Status bar indicator. */
-.locker-status {
+.locker-status,
+.locky-status {
 	cursor: default;
 	display: inline-flex;
 	align-items: center;
 	gap: 0.35em;
 }
 
-.locker-status-icon {
+.locker-status-icon,
+.locky-status-icon {
 	display: inline-flex;
 	align-items: center;
 }
 
-.locker-status-warn {
+.locker-status-warn,
+.locky-status-warn {
 	color: var(--text-warning, #d9a441);
 	cursor: pointer;
 }
@@ -85,7 +98,8 @@
 }
 
 /* Reading-view placeholder shown instead of the raw base64 payload block. */
-.locker-blob {
+.locker-blob,
+.locky-blob {
 	padding: 1em;
 	border-radius: var(--radius-m);
 	border: 1px dashed var(--background-modifier-border);
@@ -96,6 +110,7 @@
 }
 
 /* Ribbon icon tint when one or more notes are unlocked (visible on mobile). */
-.locker-ribbon-warn {
+.locker-ribbon-warn,
+.locky-ribbon-warn {
 	color: var(--text-warning, #d9a441);
 }
