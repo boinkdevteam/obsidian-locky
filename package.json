@@ -2,6 +2,7 @@
 	"name": "locky",
 	"version": "1.0.0",
 	"description": "Encrypt note contents at rest while keeping the title visible. Lock, unlock, or permanently decrypt notes with a vault-wide password or a per-note password.",
+	"homepage": "https://community.obsidian.md/plugins/locky",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",

@@ -1,5 +1,7 @@
 # Locky
 
+[![Obsidian Community Plugin](https://img.shields.io/badge/Obsidian-Community%20Plugin-7C3AED?logo=obsidian)](https://community.obsidian.md/plugins/locky)
+
 Encrypt a note's **contents** while keeping its **title visible**. Locked notes
 stay as ordinary `.md` files — they show up in the file explorer, graph, and
 links by name — but their body is sealed with authenticated encryption until you
@@ -38,6 +40,12 @@ Forked from [danzar/Obsidian-Locker](https://github.com/danzar/Obsidian-Locker).
   ` ```locky ` block (with backward compatibility for ` ```locker `), so locked notes still sync, back up, and version like any other note.
 
 ## Installation
+
+### Obsidian Community Directory
+Install directly from the official [Obsidian Community Directory](https://community.obsidian.md/plugins/locky):
+1. In Obsidian, open **Settings** → **Community plugins**.
+2. Click **Browse** and search for **Locky**.
+3. Click **Install**, then **Enable**.
 
 ### Manual install
 Download `main.js`, `manifest.json`, and `styles.css` from the latest release and
