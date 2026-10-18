@@ -5,6 +5,6 @@
 	"minAppVersion": "1.4.0",
 	"description": "Encrypt note contents at rest while keeping the title visible. Lock, unlock, or permanently decrypt notes with a vault-wide password or a per-note password.",
 	"author": "boinkdevteam",
-	"authorUrl": "",
+	"authorUrl": "https://github.com/boinkdevteam",
 	"isDesktopOnly": false
 }

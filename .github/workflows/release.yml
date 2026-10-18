@@ -35,13 +35,12 @@ jobs:
             exit 1
           fi
 
-      - name: Create draft release
+      - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
         run: |
           gh release create "$tag" \
             --title="$tag" \
-            --draft \
             --notes "Release $tag. See the changelog in README.md." \
             main.js manifest.json styles.css
